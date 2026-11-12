@@ -1,0 +1,1280 @@
+---
+title: "The Blue Kite on Douban: Analysis"
+author: "Jiayi Zhang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# HOW TO USE: keep this file in the project folder with the data files (not
+# included in this repository) and click Knit.
+# All file paths below are relative to that folder. Every table and file the
+# analysis produces is saved in its own run folder inside r_output/,
+# named by date and time (e.g. r_output/run_2026-10-17_0930/), so the outputs of
+# each knit are kept apart from earlier runs.
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# 0. Packages
+
+```{r packages}
+# The packages this analysis needs. Any that are missing are installed from
+# CRAN the first time you knit (this can take a few minutes, once).
+pkgs <- c("quanteda", "quanteda.textstats", "seededlda", "stopwords",
+          "tidyverse", "stringi", "Rtsne", "plotly", "LDAvis", "knitr", "jsonlite",
+          "clue", "ggrepel", "ragg")
+missing <- setdiff(pkgs, rownames(installed.packages()))
+if (length(missing)) install.packages(missing, repos = "https://cloud.r-project.org")
+
+library(quanteda)            # tokenizing and document-feature matrices
+library(quanteda.textstats)  # keyness (collocates)
+library(seededlda)           # unsupervised and seeded LDA
+library(stopwords)           # the marimo Chinese stopword list
+library(tidyverse)           # data cleaning (dplyr, stringr, readr, ggplot2...)
+library(stringi)             # traditional -> simplified conversion
+library(Rtsne)               # t-SNE
+library(plotly)              # interactive t-SNE plots
+library(LDAvis)              # interactive topic map
+library(knitr)               # kable() tables
+library(ggrepel)             # non-overlapping word labels in the static t-SNE figures
+# (ragg, used to save the figures as PNG with Chinese text, is called as ragg::)
+# (clue is used below to match topics between runs; it is called as clue::)
+
+# Folder for all outputs: one new folder per run, named by date and time, inside
+# r_output/ (e.g. r_output/run_2026-10-17_0930/). Earlier runs are never overwritten.
+out_dir <- file.path("r_output", paste0("run_", format(Sys.time(), "%Y-%m-%d_%H%M")))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+cat("All outputs of this run are saved in:", out_dir, "\n")
+# Keep a copy of this Rmd with the outputs, so each run records the code that made it
+if (!is.null(knitr::current_input())) {
+  file.copy(knitr::current_input(), out_dir, overwrite = TRUE)
+}
+# All CSVs are saved with write_excel_csv(): it adds a marker at the start of the
+# file so Excel opens the Chinese text correctly instead of showing garbled text.
+```
+
+# 1. Load and clean
+
+Long reviews: title and text are combined (the 2026 scraper stores the title
+separately; for example, one review's title is "真是克夫"). Five reviews that
+the same author posted twice are removed.
+
+Short comments: the one empty comment is dropped, and Douban's edit stamps
+("@2016-10-27 10:00:54") are stripped.
+
+Both corpora are converted from traditional to simplified characters, and the
+heroine's name is unified (陈树娟 / 淑娟 → 树娟) so that every mention counts
+as the same word.
+
+```{r load}
+# Convert traditional characters to simplified (some reviews are in 繁体).
+# If the converter is unavailable on this computer, the text is left unchanged.
+to_simplified <- function(x) {
+  tryCatch(stri_trans_general(x, "Traditional-Simplified"), error = function(e) x)
+}
+
+# One cleaning function applied to every text:
+#  - empty values become ""
+#  - traditional -> simplified
+#  - remove Douban's "@2016-10-27 10:00:54" edit stamps
+#  - unify the heroine's name (陈树娟 and the common misspelling 淑娟 -> 树娟)
+#  - unify Zhu Ying's name (朱英 -> 朱瑛)
+#  - unify the Cultural Revolution (文化大革命 -> 文革), so every mention reaches
+#    the seed word 文革 and is not split into 文化 / 大 / 革命
+normalize <- function(x) {
+  x %>%
+    replace_na("") %>%
+    to_simplified() %>%
+    str_replace_all("@\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", "") %>%
+    str_replace_all("陈树娟|淑娟", "树娟") %>%
+    str_replace_all("朱英", "朱瑛") %>%
+    str_replace_all("文化大革命", "文革")
+}
+
+# --- Long reviews (影评) ---
+long_raw <- read_csv("reviews_1303967/reviews_unique.csv",
+                     col_types = cols(.default = col_character()))
+
+long <- long_raw %>%
+  distinct(text, .keep_all = TRUE) %>%                      # drop the 5 double posts
+  mutate(text_full = normalize(paste(title, text, sep = "\n")),  # title + body
+         date = ymd_hms(str_sub(date, 1, 19), quiet = TRUE),
+         year = year(date),
+         rating = as.numeric(rating),
+         useful = as.numeric(useful),
+         corpus = "long") %>%
+  select(id = rid, author = author_hash, date, year, rating,
+         votes = useful, text = text_full, corpus)
+
+# --- Short comments (短评) ---
+short_raw <- read_csv("blue_kite_douban_unique.csv",
+                      col_types = cols(.default = col_character()))
+
+short <- short_raw %>%
+  filter(!is.na(text), str_trim(text) != "") %>%            # drop the empty comment
+  mutate(text = normalize(text),
+         date = ymd_hms(str_sub(date, 1, 19), quiet = TRUE),
+         year = year(date),
+         rating = as.numeric(rating),
+         votes = as.numeric(votes),
+         corpus = "short") %>%
+  select(id = cid, author = user_hash, date, year, rating, votes, text, corpus,
+         starts_with("in_"))                                 # which Douban lists it was in
+
+# Both corpora in one table (used for counts and the 克夫 export)
+both <- bind_rows(long, short)
+```
+
+## Corpus summary (for the data section)
+
+```{r summary}
+# Numbers for the methods section: documents, distinct authors, date range, length.
+corpus_summary <- both %>%
+  group_by(corpus) %>%
+  summarise(documents = n(),
+            authors = n_distinct(author[!is.na(author) & author != ""]),
+            first = min(date, na.rm = TRUE),
+            last = max(date, na.rm = TRUE),
+            median_chars = median(nchar(text)),
+            total_chars = sum(nchar(text)))
+kable(corpus_summary)
+cat("Distinct authors across both corpora:",
+    n_distinct(both$author[!is.na(both$author) & both$author != ""]), "\n")
+write_excel_csv(corpus_summary, file.path(out_dir, "corpus_summary.csv"))
+```
+
+# 2. Tokenization and stopwords
+
+quanteda splits Chinese with ICU's dictionary, which breaks many names and
+some key words into single characters (树娟 → 树 | 娟, 田壮壮 → 田 | 壮 | 壮,
+霸王别姬 → 霸王 | 别 | 姬, 禁片 → 禁 | 片). The `compounds` list joins them
+back. This matters: without it, the model never sees 树娟 as a word.
+
+```{r split-demo}
+# Demonstration of the problem: how quanteda splits these phrases on its own
+tokens(c("树娟的命运", "田壮壮的禁片", "霸王别姬和活着"))
+```
+
+```{r tokenize}
+# Names and words that the tokenizer breaks apart; they are glued back together.
+compounds <- c("田壮壮", "树娟", "吕丽萍", "林少龙", "少龙", "李国栋", "国栋",
+               "濮存昕", "李雪健", "郭宝昌", "陈树生", "树生", "朱瑛",
+               "张艺谋", "陈凯歌", "霸王别姬", "禁片", "被禁", "禁拍", "反右",
+               "反思", "劳改", "文工团", "第五代", "吴清源", "蓝风筝",
+               "男权", "女权", "母爱", "女主角", "女主")
+
+# Base stopword list: marimo Chinese stopwords (same as the CulturaCognize pipeline)
+base_stop <- tryCatch(stopwords("zh", source = "marimo"),
+                      error = function(e) stopwords("zh", source = "misc"))
+
+# Custom stopword list, built from the most frequent tokens in
+# this corpus that carry no content (filler, platform and generic film words).
+# Character names, the director, and comparison films are deliberately KEPT.
+custom_stop <- c(
+  # generic film / platform words
+  "电影", "影片", "片子", "本片", "全片", "片中", "一部", "这部", "影评", "看过",
+  "看完", "看了", "蓝风筝", "风筝",
+  # filler and function words not in marimo
+  "一个", "没有", "自己", "就是", "他们", "都是", "时候", "的是", "可以", "人的",
+  "一种", "觉得", "一样", "感觉", "也是", "看到", "出来", "开始", "中的", "其实",
+  "不能", "这种", "还有", "现在", "知道", "怎么", "已经", "一直", "真的",
+  "不知道", "虽然", "一段", "甚至", "只能", "一次", "并不", "可是", "也许",
+  "只有", "后来", "一点", "就像", "成了", "比较", "有些", "有点", "起来",
+  "比如", "总是", "本身", "来说", "有人", "能够", "整个", "我想", "一般",
+  "终于", "需要", "太多", "大家", "真正", "除了", "一句", "那种", "不够",
+  "特别", "不会", "的话", "同时", "或许", "好像", "当然", "很好", "这里",
+  "到了", "告诉", "无论", "都有", "不想", "上了", "不要", "更加", "一起",
+  "最后", "很多", "事情", "东西", "一些", "这样", "那样", "这么", "那么",
+  # added after reviewing the exploratory results (t-SNE, unsupervised LDA):
+  # filler words that carried no content in clusters or topics
+  "之后", "无法", "应该", "可能", "发生", "出现", "似乎", "成为", "喜欢", "非常",
+  "一下", "最终",
+  # possessives (pure grammar; some slipped past the base list)
+  "我的", "你的", "他的", "她的", "它的", "我们的", "他们的", "她们的",
+  # the suffix of 历史性的 / 悲剧性的 cut off by the tokenizer
+  # (it means "-ic / -al", not gender or sex)
+  "性的")
+
+# Single characters are dropped (mostly particles like 了 着 被), except these,
+# which carry meaning in this corpus.
+keep_single <- c("嫁", "命", "死", "家", "爱", "党", "苦", "惨", "恨", "痛", "禁")
+
+# The full tokenizing recipe, applied the same way to every corpus:
+#  1. split into words, dropping punctuation, numbers, symbols and links
+#  2. glue the split names back together (compounds)
+#  3. lowercase (for the few English words)
+#  4. remove Chinese and English stopwords
+#  5. keep words of 2+ characters, plus the meaningful single characters
+prep_tokens <- function(corp) {
+  tokens(corp, remove_punct = TRUE, remove_numbers = TRUE,
+         remove_symbols = TRUE, remove_url = TRUE) %>%
+    tokens_compound(pattern = as.list(tokens(compounds)), concatenator = "") %>%
+    tokens_tolower() %>%
+    tokens_remove(pattern = c(base_stop, custom_stop, stopwords("en"))) %>%
+    tokens_keep(pattern = c("^.{2,}$", paste0("^", keep_single, "$")),
+                valuetype = "regex")
+}
+
+# Save the full stopword list (for the paper's appendix)
+writeLines(c("# marimo zh (base)", base_stop, "", "# custom", custom_stop,
+             "", "# single characters kept", keep_single),
+           file.path(out_dir, "stopwords_used.txt"))
+```
+
+```{r tokens-check}
+# Sanity check: each key word should appear about as often as a token as it does
+# in the raw text. A big gap would mean the tokenizer is still splitting it.
+corp_long <- corpus(long, docid_field = "id", text_field = "text")
+toks_long <- prep_tokens(corp_long)
+key_words <- c("树娟", "吕丽萍", "母亲", "妈妈", "女人", "克夫", "田壮壮",
+               "霸王别姬", "活着", "禁片", "反右")
+kable(tibble(word = key_words,
+             tokens = sapply(key_words, function(w) sum(ntoken(tokens_keep(toks_long, w)))),
+             raw_string = sapply(key_words, function(w) sum(str_count(long$text, fixed(w))))))
+```
+
+# 3. What viewers mention: counts
+
+Share of texts in each corpus that mention at least one word in a group
+(string matching on the cleaned text, so tokenization does not matter here).
+Short comments are far shorter (median about 20 characters versus about 600),
+so compare **within** each corpus, for example each group relative to history,
+rather than raw percentages across corpora.
+
+```{r counts}
+# Word groups to count. "|" means "or": a text counts if it contains any of them.
+groups <- list(
+  history          = "历史|时代|年代",
+  campaigns        = "文革|文化大革命|反右|右派|大跃进|红卫兵|批斗|整风",
+  ban              = "禁片|被禁|禁拍|禁映|封禁",
+  film_comparison  = "活着|霸王别姬",
+  director         = "田壮壮|导演",
+  mother_shujuan   = "母亲|妈妈|树娟|吕丽萍|女主",
+  fathers          = "父亲|爸爸|继父|叔叔",
+  child_tietou     = "铁头|孩子|儿子|童年",
+  marriage         = "婚姻|结婚|改嫁|嫁|丈夫|寡妇",
+  women_gender     = "女人|女性|妇女|性别|男权|女权|父权",
+  kefu             = "克夫",
+  fate             = "命运|命苦|宿命"
+)
+
+# For each group and corpus: how many texts mention it, the share of texts,
+# and how many per 100 texts that mention history (a length-neutral comparison).
+counts <- map_dfr(names(groups), function(g) {
+  both %>%
+    group_by(corpus) %>%
+    summarise(n_docs = n(), n_mention = sum(str_detect(text, groups[[g]]))) %>%
+    mutate(group = g)
+}) %>%
+  mutate(share = round(100 * n_mention / n_docs, 1)) %>%
+  group_by(corpus) %>%
+  mutate(per_100_history = round(100 * n_mention / n_mention[group == "history"], 0)) %>%
+  ungroup() %>%
+  select(group, corpus, n_mention, n_docs, share, per_100_history) %>%
+  arrange(factor(group, levels = names(groups)), corpus)
+
+kable(counts)
+write_excel_csv(counts, file.path(out_dir, "counts_by_group.csv"))
+```
+
+# 4. Collocates: which words surround the mother, women, and 克夫?
+
+Keyness of words within 10 tokens of each target, compared with the rest of
+the long reviews (chi-squared; Watanabe's target-word collocation method).
+
+```{r collocates}
+# For a target word: compare the words within 10 tokens of it ("inside") with
+# all other words ("outside"). Words much more common inside are its collocates.
+collocates <- function(toks, target, window = 10, n = 20) {
+  inside  <- tokens_keep(toks, pattern = target, window = window) %>%
+    tokens_remove(pattern = target)                      # don't count the target itself
+  outside <- tokens_remove(toks, pattern = target, window = window)
+  if (sum(ntoken(inside)) == 0) return(tibble())
+  key <- textstat_keyness(rbind(dfm(inside), dfm(outside)),
+                          target = seq_len(ndoc(inside)))
+  key %>% as_tibble() %>% filter(n_target >= 3) %>% head(n)  # at least 3 co-occurrences
+}
+
+# The targets (several words count as one target, e.g. all mother words)
+targets <- list(mother = c("母亲", "妈妈", "树娟", "吕丽萍"),
+                women  = c("女人", "女性", "妇女"),
+                kefu   = "克夫",
+                history = "历史")
+
+coll <- map(targets, ~ collocates(toks_long, .x))
+for (nm in names(coll)) {
+  cat("\n###", nm, "\n")
+  print(kable(coll[[nm]] %>% select(feature, chi2, p, n_target, n_reference)))
+}
+bind_rows(coll, .id = "target") %>% write_excel_csv(file.path(out_dir, "collocates_long.csv"))
+```
+
+# 5. 克夫 texts for hand-coding
+
+Every long review and short comment that uses 克夫, with the passage around
+the word. Code each one in the `code` column:
+
+- **A** applies the label to Shujuan (seriously or as a joke)
+- **R** rejects the label or blames the era instead
+- **Q** raises the question without deciding (her fate or the era?)
+- **M** meta comment (about other viewers, the script, or the label itself)
+- **O** other
+
+```{r kefu}
+# Every text containing 克夫, with 60 characters on each side of the word,
+# and empty columns to fill in by hand. Sorted by corpus, then by votes.
+kefu <- both %>%
+  filter(str_detect(text, "克夫")) %>%
+  mutate(pos = str_locate(text, "克夫")[, 1],
+         context = str_sub(text, pmax(1, pos - 60), pos + 61),
+         code = "", notes = "") %>%
+  arrange(corpus, desc(votes)) %>%
+  select(corpus, id, date, rating, votes, context, code, notes, text)
+
+cat(nrow(kefu), "texts mention 克夫 (", sum(kefu$corpus == "long"), "long,",
+    sum(kefu$corpus == "short"), "short )\n")
+# write_excel_csv adds a marker so Excel opens the Chinese text correctly.
+# NOTE: re-knitting overwrites this file, so save your coded copy under a new name.
+write_excel_csv(kefu, file.path(out_dir, "kefu_for_coding.csv"))
+```
+
+# 6. Modeling corpus: long reviews split into paragraphs
+
+306 long reviews are too few documents for stable topic models, so each review
+is split into paragraphs, following common practice for long texts (Jockers
+2013; Schöch 2017). Paragraphs under 30 characters (titles, one-liners) are
+attached to the paragraph that follows. Results are checked at the review
+level in section 11.
+
+```{r paragraphs}
+# Split each review at line breaks, then merge short pieces (< 30 characters,
+# e.g. titles) into the next paragraph so no document is nearly empty.
+paras <- long %>%
+  mutate(p = str_split(text, "\n+")) %>%
+  select(id, date, year, rating, votes, p) %>%
+  unnest(p) %>%
+  mutate(p = str_trim(p)) %>%
+  filter(p != "") %>%
+  group_by(id) %>%
+  # a new chunk starts after every paragraph of 30+ characters
+  mutate(chunk = cumsum(lag(nchar(p) >= 30, default = FALSE))) %>%
+  group_by(id, date, year, rating, votes, chunk) %>%
+  summarise(text = paste(p, collapse = "\n"), .groups = "drop") %>%
+  mutate(doc_id = paste0(id, "_", chunk))
+
+corp_para <- corpus(paras, docid_field = "doc_id", text_field = "text")
+toks_para <- prep_tokens(corp_para)
+
+# Document-feature matrix: keep words used at least 5 times in at least 3 paragraphs
+dfmat <- dfm(toks_para) %>%
+  dfm_trim(min_termfreq = 5, min_docfreq = 3)
+dfmat <- dfm_subset(dfmat, ntoken(dfmat) > 0)        # drop paragraphs left empty
+
+cat("Paragraph documents:", ndoc(dfmat), " Vocabulary:", nfeat(dfmat), "\n")
+topfeatures(dfmat, 40)
+```
+
+# 7. Exploratory t-SNE
+
+Each dot is a word. Words used in the same paragraphs sit close together.
+Colors are k-means clusters of the dots, computed separately for each plot,
+so cluster numbers do not correspond between the two plots. Nearness *within*
+a cluster is meaningful; distances *between* clusters are not.
+
+```{r tsne-function}
+# Build a t-SNE map of the given word-by-paragraph matrix, color it by 5 k-means
+# clusters, and return an interactive plot with its own title and legend.
+tsne_plot <- function(m, title, seed, out_csv = NULL) {
+  set.seed(seed)                                      # same layout every knit
+  m <- m[!duplicated(m), ]                            # t-SNE cannot take duplicate rows
+  ts <- Rtsne(m, dims = 2, perplexity = 20, check_duplicates = FALSE)
+  df <- tibble(Dim1 = ts$Y[, 1], Dim2 = ts$Y[, 2], Term = rownames(m))
+  df$Cluster <- as.factor(kmeans(df[, 1:2], centers = 5)$cluster)
+  # Save each word's cluster (for the cluster tables), strongest words first
+  if (!is.null(out_csv)) {
+    df %>% mutate(weight = rowSums(m)) %>% arrange(Cluster, desc(weight)) %>%
+      write_excel_csv(out_csv)
+  }
+  plot_ly(df, x = ~Dim1, y = ~Dim2, type = "scatter", mode = "markers+text",
+          color = ~Cluster, text = ~Term, textposition = "top center",
+          marker = list(size = 8)) %>%
+    # margin t = 70 leaves room above the plot so the title is not clipped
+    layout(title = list(text = title, y = 0.98, yanchor = "top"),
+           margin = list(t = 70),
+           legend = list(title = list(text = "cluster"))) %>%
+    # the camera icon on the plot saves a sharp PNG (2x resolution)
+    config(toImageButtonOptions = list(format = "png", width = 1100,
+                                       height = 850, scale = 2))
+}
+```
+
+## Frequency-based: the most common words
+
+```{r tsne-freq, fig.width=9, fig.height=7}
+# Rows = the 80 most frequent words; columns = their counts in each paragraph
+term_freq <- t(as.matrix(dfmat))
+top_freq <- names(sort(rowSums(term_freq), decreasing = TRUE))[1:80]
+tsne_plot(term_freq[top_freq, ], "t-SNE: top 80 terms by frequency", 1,
+          out_csv = file.path(out_dir, "tsne_freq_clusters.csv"))
+```
+
+## TF-IDF-based: the most distinctive words
+
+```{r tsne-tfidf, fig.width=9, fig.height=7}
+# TF-IDF down-weights words that appear everywhere, so distinctive words rise
+term_tfidf <- t(as.matrix(dfm_tfidf(dfmat)))
+top_tfidf <- names(sort(rowMeans(term_tfidf), decreasing = TRUE))[1:80]
+tsne_plot(term_tfidf[top_tfidf, ], "t-SNE: top 80 terms by TF-IDF", 2,
+          out_csv = file.path(out_dir, "tsne_tfidf_clusters.csv"))
+```
+
+## Static figures for the paper
+
+The interactive maps above are for exploring. This chunk draws print-ready
+versions and saves them as 300-dpi PNGs (`fig_tsne_freq.png` and
+`fig_tsne_tfidf.png` in this run's folder) to paste into the paper. They are drawn from the
+saved cluster CSVs, so the layout and clusters are exactly the same as above
+and in the cluster tables. Labels are pushed apart so they do not overlap.
+Set `show_titles` to FALSE to drop the titles inside the images (in the paper
+the title can go in the figure caption instead).
+
+To show cluster names instead of numbers, fill in `freq_names` and
+`tfidf_names` and rerun **this chunk only** (no need to rerun the t-SNE).
+`label_lang` switches the word labels between English, Chinese, or both.
+
+```{r tsne-static, fig.width=7.5, fig.height=4.4, dev="ragg_png"}
+# A Chinese font that exists on this computer (the first one found is used)
+fig_font <- intersect(c("PingFang SC", "Hiragino Sans GB", "Songti SC", "STHeiti"),
+                      systemfonts::system_fonts()$family)[1]
+if (is.na(fig_font)) fig_font <- ""   # none found: R's default font
+cat("Font for the figures:", fig_font, "\n")
+
+# Cluster names: leave as NULL to show numbers, or fill in like this
+# (the number on the left must match the cluster number in the CSV):
+# freq_names <- c("1" = "Shujuan and her husbands", "2" = "...", "3" = "...",
+#                 "4" = "...", "5" = "...")
+freq_names  <- NULL
+tfidf_names <- NULL
+
+# Word labels: "en" = English, "zh" = Chinese, "both" = Chinese above English.
+# English comes from tsne_glossary.csv (same translations as the cluster table;
+# edit that file to change a translation). Words missing from it stay in Chinese.
+label_lang <- "en"
+
+# Titles inside the images (TRUE) or none (FALSE)
+show_titles <- FALSE   # ASA style: the title goes in the figure caption
+gloss <- read_csv("tsne_glossary.csv", show_col_types = FALSE)
+
+tsne_static <- function(csv, names, out_png, title = NULL) {
+  df <- read_csv(csv, show_col_types = FALSE) %>%
+    mutate(Cluster = as.character(Cluster)) %>%
+    left_join(gloss, by = "Term") %>%
+    mutate(label = case_when(label_lang == "zh" | is.na(English) ~ Term,
+                             label_lang == "en" ~ English,
+                             TRUE ~ paste0(Term, "\n", English)))
+  if (any(is.na(df$English))) {
+    cat("No English in tsne_glossary.csv for:", df$Term[is.na(df$English)], "\n")
+  }
+  if (!is.null(names)) {
+    df$Cluster <- factor(names[df$Cluster], levels = names)
+  }
+  p <- ggplot(df, aes(Dim1, Dim2, color = Cluster, shape = Cluster)) +
+    geom_point(size = 1.8) +
+    geom_text_repel(aes(label = label), family = fig_font,
+                    size = if (label_lang == "both") 2.6 else 3, lineheight = 0.9,
+                    max.overlaps = Inf,          # show every word
+                    box.padding = 0.25, point.padding = 0.15,
+                    min.segment.length = 0.3, segment.size = 0.2,
+                    seed = 1, show.legend = FALSE) +
+    # colors plus shapes, so clusters stay distinct in black-and-white print
+    scale_color_brewer(palette = "Dark2", name = "Cluster") +
+    scale_shape_manual(values = c(16, 17, 15, 18, 8), name = "Cluster") +
+    labs(title = if (show_titles) title else NULL,
+         x = "t-SNE dimension 1", y = "t-SNE dimension 2") +
+    theme_minimal(base_family = fig_font, base_size = 10) +
+    theme(legend.position = "right",        # legend beside the map, so the figure is wide, not square
+          plot.title = element_text(face = "bold", size = 11),
+          panel.grid.minor = element_blank())
+  ggsave(out_png, p, width = 7.5, height = 4.4, dpi = 300,
+         device = ragg::agg_png, bg = "white")
+  p
+}
+
+tsne_static(file.path(out_dir, "tsne_freq_clusters.csv"),  freq_names,  file.path(out_dir, "fig_tsne_freq.png"),
+            title = "The 80 most frequent words")
+tsne_static(file.path(out_dir, "tsne_tfidf_clusters.csv"), tfidf_names, file.path(out_dir, "fig_tsne_tfidf.png"),
+            title = "The 80 most distinctive words (TF-IDF)")
+```
+
+# 8. Unsupervised LDA
+
+```{r helpers}
+# Two helper functions used by the models below.
+
+# topic_share(): share of all words in the corpus assigned to each topic
+topic_share <- function(m, x = dfmat) {
+  doc_len <- rowSums(x)
+  sort(colSums(m$theta * doc_len) / sum(doc_len), decreasing = TRUE)
+}
+
+# landing(): for each word, which topic it most likely belongs to, and how strongly.
+# p(topic | word) = p(word | topic) x topic size, normalized over topics.
+landing <- function(m, words, x = dfmat) {
+  sizes <- colSums(m$theta * rowSums(x))             # how big each topic is
+  words <- intersect(words, colnames(m$phi))
+  map_dfr(words, function(w) {
+    p <- m$phi[, w] * sizes
+    p <- p / sum(p)
+    tibble(word = w, top_topic = names(which.max(p)),
+           p_top = round(max(p), 2),
+           second = names(sort(p, decreasing = TRUE))[2],
+           p_second = round(sort(p, decreasing = TRUE)[2], 2))
+  })
+}
+
+# ---- Comparing runs of the same model (to pick the most typical run) ----
+cosine <- function(a, b) sum(a * b) / sqrt(sum(a^2) * sum(b^2))
+js_div <- function(p, q) {                    # Jensen-Shannon divergence (LDAvis's distance)
+  m <- (p + q) / 2
+  0.5 * sum(p * log(p / m)) + 0.5 * sum(q * log(q / m))
+}
+
+# Pair up the topics of two runs. Seeded runs: topics with the same name.
+# Unsupervised runs (no names): optimal one-to-one matching on word similarity.
+pair_topics <- function(m1, m2, names = NULL) {
+  if (!is.null(names)) {
+    return(list(i1 = match(names, rownames(m1$phi)), i2 = match(names, rownames(m2$phi))))
+  }
+  A <- m1$phi; B <- m2$phi
+  S <- (A %*% t(B)) / outer(sqrt(rowSums(A^2)), sqrt(rowSums(B^2)))
+  if (requireNamespace("clue", quietly = TRUE)) {
+    perm <- as.integer(clue::solve_LSAP(S, maximum = TRUE))
+  } else {                                    # greedy matching if clue is missing
+    perm <- integer(nrow(S))
+    for (r in seq_len(nrow(S))) {
+      idx <- which(S == max(S), arr.ind = TRUE)[1, ]
+      perm[idx[1]] <- idx[2]; S[idx[1], ] <- -Inf; S[, idx[2]] <- -Inf
+    }
+  }
+  list(i1 = seq_len(nrow(A)), i2 = perm)
+}
+
+# Four ways two runs can agree (1 = identical):
+#   words     - matched topics have the same word distributions (cosine similarity)
+#   sizes     - topics take up the same share of the corpus (1 - total variation distance)
+#   documents - the same paragraphs are assigned to the same topics (correlation of theta)
+#   distances - topics sit in the same positions relative to each other, i.e. the
+#               LDAvis map (correlation of the topic-to-topic distance matrices)
+compare_two <- function(m1, m2, names = NULL, x = dfmat) {
+  pr <- pair_topics(m1, m2, names); i1 <- pr$i1; i2 <- pr$i2
+  len <- rowSums(x)
+  s1 <- colSums(m1$theta * len) / sum(len)
+  s2 <- colSums(m2$theta * len) / sum(len)
+  d1 <- outer(i1, i1, Vectorize(function(a, b) js_div(m1$phi[a, ], m1$phi[b, ])))
+  d2 <- outer(i2, i2, Vectorize(function(a, b) js_div(m2$phi[a, ], m2$phi[b, ])))
+  c(words     = mean(mapply(function(a, b) cosine(m1$phi[a, ], m2$phi[b, ]), i1, i2)),
+    sizes     = 1 - 0.5 * sum(abs(s1[i1] - s2[i2])),
+    documents = mean(mapply(function(a, b) cor(m1$theta[, a], m2$theta[, b]), i1, i2)),
+    distances = cor(d1[upper.tri(d1)], d2[upper.tri(d2)]))
+}
+
+# Compare every pair of runs. For each criterion, each run's average agreement
+# with all other runs is ranked (1 = most typical); the most typical run overall
+# has the best average rank across the four criteria.
+typical_run <- function(runs, names = NULL, x = dfmat) {
+  n <- length(runs); crit <- c("words", "sizes", "documents", "distances")
+  sims <- array(NA, c(n, n, 4), dimnames = list(NULL, NULL, crit))
+  for (i in 1:(n - 1)) for (j in (i + 1):n) {
+    v <- compare_two(runs[[i]], runs[[j]], names, x)
+    sims[i, j, ] <- v
+    sims[j, i, ] <- v
+  }
+  avg <- apply(sims, c(1, 3), mean, na.rm = TRUE)          # runs x criteria
+  ranks <- apply(-avg, 2, rank)                            # 1 = most typical
+  tab <- bind_cols(tibble(run_seed = seq_len(n)), as_tibble(round(avg, 3))) %>%
+    mutate(mean_rank = rowMeans(ranks)) %>%
+    arrange(mean_rank)
+  overall <- t(apply(sims, 3, function(m) c(mean = mean(m, na.rm = TRUE),
+                                            min = min(m, na.rm = TRUE),
+                                            max = max(m, na.rm = TRUE))))
+  list(medoid = tab$run_seed[1], table = tab, overall = round(overall, 3))
+}
+
+# Per-topic stability: for each topic of the most typical run, how closely does
+# its matching topic in each other run resemble it? Strong, central themes come
+# back almost unchanged; small or fuzzy themes vary. Only interpret stable topics.
+# (0.8 is a rule-of-thumb cutoff for "essentially the same topic".)
+topic_stability <- function(runs, medoid, names = NULL) {
+  ref <- runs[[medoid]]
+  others <- setdiff(seq_along(runs), medoid)
+  sims <- sapply(others, function(r) {
+    pr <- pair_topics(ref, runs[[r]], names)
+    mapply(function(a, b) cosine(ref$phi[a, ], runs[[r]]$phi[b, ]), pr$i1, pr$i2)
+  })                                                # topics x other runs
+  if (is.null(dim(sims))) sims <- matrix(sims, nrow = 1)
+  ids <- if (is.null(names)) seq_len(nrow(ref$phi)) else match(names, rownames(ref$phi))
+  tops <- apply(seededlda::terms(ref, 6), 2, paste, collapse = " ")
+  tibble(topic = rownames(ref$phi)[ids],
+         top_words = tops[ids],
+         mean_similarity = round(rowMeans(sims), 3),
+         pct_runs_above_0.8 = round(100 * rowMeans(sims >= 0.8)))
+}
+```
+
+## Choosing the number of topics (k)
+
+The model is fitted for several values of k and two measures are compared:
+
+- **Perplexity** (lower is better fit). On the data the model was trained on,
+  it almost always keeps falling as k grows, so it cannot pick k alone; look
+  for where the curve flattens.
+- **Divergence** (higher means topics are more distinct from each other;
+  Watanabe and Baturo's measure in seededlda). Look for where it peaks or
+  stops rising.
+
+A second set of standard measures comes from the `ldatuning` package
+(Griffiths & Steyvers 2004; Cao Juan et al. 2009; Arun et al. 2010; Deveaud
+et al. 2014). Then read the top words for the candidate values: the final
+choice should also give interpretable topics (Chang et al. 2009 show that
+better statistical fit does not guarantee more interpretable topics). Finally,
+check whether the substantive findings hold across the whole sensible range.
+
+```{r k-test, fig.width=9, fig.height=4}
+# Safely compute a seededlda fit measure (returns NA if this version lacks it)
+metric <- function(fname, m) {
+  if (!exists(fname, envir = asNamespace("seededlda"))) return(NA_real_)
+  tryCatch(as.numeric(get(fname, envir = asNamespace("seededlda"))(m)),
+           error = function(e) NA_real_)
+}
+
+k_values <- c(4, 6, 8, 10, 12, 15)
+k_models <- list()
+k_test <- map_dfr(k_values, function(k) {
+  set.seed(2024)
+  m <- textmodel_lda(dfmat, k = k, max_iter = 2000, auto_iter = TRUE)
+  k_models[[as.character(k)]] <<- m                 # keep each model for section below
+  tibble(k = k,
+         perplexity = metric("perplexity", m),
+         divergence = metric("divergence", m))
+})
+kable(k_test)
+write_excel_csv(k_test, file.path(out_dir, "k_selection.csv"))
+
+# Plot both measures against k
+k_test %>%
+  pivot_longer(-k, names_to = "measure") %>%
+  ggplot(aes(k, value)) +
+  geom_line() + geom_point() +
+  facet_wrap(~ measure, scales = "free_y") +
+  scale_x_continuous(breaks = k_values) +
+  labs(title = "Unsupervised LDA: fit by number of topics", y = NULL) +
+  theme_minimal()
+```
+
+## ldatuning: four standard measures
+
+```{r ldatuning, fig.width=9, fig.height=5}
+# ldatuning fits a standard LDA (topicmodels package) at each k and reports:
+#   Griffiths2004 (maximize), Deveaud2014 (maximize),
+#   CaoJuan2009 (minimize), Arun2010 (minimize).
+# Look for the k where the "maximize" lines peak and the "minimize" lines bottom out.
+# This is the slowest chunk (a few minutes). If the packages cannot be installed,
+# it is skipped and the rest of the report still knits.
+tuning_pkgs <- c("ldatuning", "topicmodels")
+need <- setdiff(tuning_pkgs, rownames(installed.packages()))
+if (length(need)) try(install.packages(need, repos = "https://cloud.r-project.org"))
+
+if (all(sapply(tuning_pkgs, requireNamespace, quietly = TRUE))) {
+  dtm <- convert(dfmat, to = "topicmodels")          # quanteda dfm -> topicmodels format
+  tuning <- ldatuning::FindTopicsNumber(
+    dtm, topics = k_values,
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+    method = "Gibbs", control = list(seed = 2024), mc.cores = 2L, verbose = FALSE)
+  print(kable(tuning))
+  write_excel_csv(tuning, file.path(out_dir, "k_selection_ldatuning.csv"))
+  ldatuning::FindTopicsNumber_plot(tuning)
+} else {
+  cat("ldatuning or topicmodels could not be installed; this check was skipped.\n")
+}
+```
+
+## Do the findings hold across k?
+
+```{r probe-by-k}
+# For each k: which topic do the mother and gender words fall into, and what is
+# that topic about (its top 6 words)? If 母亲 stays with the family words at
+# every k, the finding does not depend on the choice of k.
+probe_by_k <- map_dfr(names(k_models), function(k) {
+  m <- k_models[[k]]
+  topic_words <- apply(seededlda::terms(m, 6), 2, paste, collapse = " ")
+  landing(m, c("母亲", "树娟", "吕丽萍", "女人", "克夫")) %>%
+    mutate(k = as.integer(k), topic_words = topic_words[top_topic]) %>%
+    select(word, k, top_topic, p_top, topic_words)
+}) %>%
+  arrange(factor(word, levels = c("母亲", "树娟", "吕丽萍", "女人", "克夫")), k)
+kable(probe_by_k)
+write_excel_csv(probe_by_k, file.path(out_dir, "probe_words_by_k.csv"))
+```
+
+## Top words at candidate values of k
+
+```{r k-terms}
+# Compare how the topics read at k = 6, 8 and 10
+for (k in c("6", "8", "10")) {
+  cat("\n### k =", k, "\n")
+  print(kable(seededlda::terms(k_models[[k]], 10)))
+}
+```
+
+## Final unsupervised model
+
+Topic models start from a random position, so two runs with different random
+seeds give slightly different topics. (The same seed always gives exactly the
+same result, so re-knitting never changes anything.) To avoid reporting a
+lucky or unlucky run, the model is fitted 100 times and the **most typical
+run** (the "medoid") is kept. Runs are compared on four criteria: the words
+in each topic, the size of each topic, which paragraphs each topic is assigned
+to, and the distances between topics (the layout of the LDAvis map). Each run
+is ranked on each criterion by its average agreement with the other 99 runs,
+and the run with the best average rank is used. See Roberts, Stewart and Tingley
+(2016) on why topic models should be run from multiple starting points.
+
+```{r lda}
+# Change k_chosen after looking at the plots and word lists above.
+k_chosen <- 8
+n_runs <- 100     # number of restarts (100 gives about +/-10 points precision on "% of runs")
+
+# Fit the unsupervised model 100 times with different random seeds
+lda_runs <- map(1:n_runs, function(s) {
+  set.seed(s)
+  textmodel_lda(dfmat, k = k_chosen, max_iter = 2000, auto_iter = TRUE)
+})
+
+# Convergence check: each run stops early once it converges (auto_iter = TRUE).
+# A run that used all 2000 iterations would not have converged.
+iters <- unlist(lapply(lda_runs, function(m) m$last_iter))
+if (length(iters)) cat("Gibbs iterations used per run: min", min(iters), ", max", max(iters),
+                       "(limit 2000)\n")
+
+# Compare all pairs of runs on four criteria and find the most typical run
+typ_lda <- typical_run(lda_runs)
+cat("How similar the runs are (1 = identical):\n")
+kable(typ_lda$overall)
+cat("The 5 most typical runs (rank 1 = most typical on that criterion):\n")
+kable(head(typ_lda$table, 5))
+write_excel_csv(typ_lda$table, file.path(out_dir, "stability_lda_runs.csv"))
+lda_medoid <- typ_lda$medoid
+
+# Report the most typical run
+lda <- lda_runs[[lda_medoid]]
+kable(seededlda::terms(lda, 12))
+
+# Which topics of this run are stable across all runs?
+lda_topic_stab <- topic_stability(lda_runs, lda_medoid)
+kable(lda_topic_stab)
+write_excel_csv(lda_topic_stab, file.path(out_dir, "stability_lda_topics.csv"))
+```
+
+## Files for naming the topics
+
+Saves what you need to name the unsupervised topics: the top 15 words of each
+topic in the most typical run, each topic's share of the corpus, and where the
+mother and gender words land. If `lda` is still in your R session, you can run
+this chunk alone (no need to refit the 100 runs).
+
+```{r lda-export}
+# Top 15 words per topic (one column per topic)
+write_excel_csv(as_tibble(seededlda::terms(lda, 15)), file.path(out_dir, "lda_medoid_terms.csv"))
+
+# Share of all words assigned to each topic
+lda_shares <- tibble(topic = names(topic_share(lda)),
+                     share_pct = round(100 * topic_share(lda), 1))
+kable(lda_shares)
+write_excel_csv(lda_shares, file.path(out_dir, "lda_medoid_shares.csv"))
+
+# Which topic each key word most likely belongs to (landing() is defined above)
+lda_land <- landing(lda, c("母亲", "妈妈", "树娟", "吕丽萍", "女人", "克夫",
+                           "丈夫", "婚姻", "铁头", "继父", "命运", "文革"))
+kable(lda_land)
+write_excel_csv(lda_land, file.path(out_dir, "lda_medoid_word_landing.csv"))
+```
+
+## Topic map (LDAvis) for the unsupervised model
+
+The same interactive topic map as in section 12, drawn for the most typical
+unsupervised run. Click this chunk's green arrow: the map opens in RStudio's
+Viewer pane, and a summary table prints below the chunk. LDAvis numbers topics
+by size (1 = largest), so the table shows which LDAvis number is which model
+topic, with its size, its stability across the 100 runs, and its top 15 words.
+Run `lda-export` first (it makes `lda_shares`).
+
+```{r lda-ldavis}
+# 1. The LDAvis data for the unsupervised model
+json_lda <- createJSON(phi = lda$phi,
+                       theta = lda$theta,
+                       doc.length = rowSums(dfmat),
+                       vocab = colnames(lda$phi),
+                       term.frequency = colSums(dfmat)[colnames(lda$phi)])
+serVis(json_lda, out.dir = file.path(out_dir, "LDAvis_unsupervised"), open.browser = FALSE)
+
+# 2. One self-contained page (code, style and data in one file), as in section 12
+vis_dir <- file.path(out_dir, "LDAvis_unsupervised")
+read_vis <- function(f) paste(readLines(file.path(vis_dir, f), warn = FALSE,
+                                        encoding = "UTF-8"), collapse = "\n")
+lda_page <- paste0(
+  '<!DOCTYPE html>\n<html><head><meta charset="utf-8">',
+  '<title>LDAvis: Blue Kite unsupervised LDA</title>\n',
+  '<style>', read_vis("lda.css"), '</style>\n',
+  '<script>', read_vis("d3.v3.js"), '</script>\n',
+  '<script>', read_vis("ldavis.js"), '</script>\n',
+  '</head><body><div id="lda"></div>\n<script>\n',
+  'var LDA_DATA = ', read_vis("lda.json"), ';\n',
+  'd3.json = function(url, callback) { callback(null, LDA_DATA); };\n',
+  'var vis = new LDAvis("#lda", "lda.json");\n',
+  '</script></body></html>')
+writeLines(lda_page, file.path(out_dir, "LDAvis_unsupervised_standalone.html"), useBytes = TRUE)
+
+# 3. Summary table: LDAvis number -> model topic, size, stability, top 15 words
+vis_order <- jsonlite::fromJSON(json_lda)$topic.order
+top15 <- seededlda::terms(lda, 15)
+lda_summary <- tibble(ldavis_number = seq_along(vis_order),
+                      topic = rownames(lda$phi)[vis_order]) %>%
+  left_join(lda_shares, by = "topic") %>%
+  left_join(dplyr::select(lda_topic_stab, topic, mean_similarity, pct_runs_above_0.8),
+            by = "topic") %>%
+  left_join(tibble(topic = colnames(top15),
+                   top_15_words = apply(top15, 2, paste, collapse = " ")),
+            by = "topic")
+kable(lda_summary)
+write_excel_csv(lda_summary, file.path(out_dir, "lda_summary.csv"))
+
+# 4. Show the map: in RStudio it opens in the Viewer pane (the Viewer only shows
+#    pages from R's temporary folder, so the file is copied there first);
+#    when knitting, it is embedded in the report instead.
+if (interactive()) {
+  tmp <- file.path(tempdir(), "LDAvis_unsupervised_standalone.html")
+  file.copy(file.path(out_dir, "LDAvis_unsupervised_standalone.html"), tmp, overwrite = TRUE)
+  viewer <- getOption("viewer")
+  if (!is.null(viewer)) viewer(tmp) else utils::browseURL(tmp)
+} else {
+  htmltools::tags$iframe(srcdoc = lda_page, width = "100%", height = "900",
+                         style = "border: 1px solid #ddd;")
+}
+```
+
+# 9. Seeded LDA with clean seeds
+
+The dictionary locked on October 16, 2026 (Appendix Table A3 in the paper).
+
+- **Seed rule.** A word seeds a topic only if (1) it lands mainly in the
+  matching unsupervised topic (section 8), (2) it appears in at least 10
+  paragraphs, (3) it has one clear meaning, and (4) it does not interfere with
+  the gender test. Political Campaigns and Gender have no unsupervised
+  counterpart, so they are judged on (2) to (4).
+- **Political Campaigns** has its own topic so that campaign vocabulary cannot
+  be absorbed into the kinship topics.
+- **Gender (test topic)** is seeded with sex-category words only (女人 男人
+  女性). Marriage words, 克夫, the mother's names and the chapter titles are
+  left unseeded; where they land is the result (sections 9 and 10).
+- **The Party and the State was dropped.** Unsupervised topic 7 is the
+  extended-family subplot, and the political words (政治 人民 主义 国家) land in
+  Fate and the Era. Their placement is reported instead.
+- 7 seeded topics + 3 residual topics (10 in total); section 11 varies the
+  residual count and tests two alternative dictionaries.
+
+```{r seeds}
+# Seed words for each theme (each word appears in only one topic).
+# Order follows Appendix Table A3: kinship, history, the film, then the test topic.
+seeds <- dictionary(list(
+  parents_child        = c("孩子", "儿子", "父亲"),
+  political_campaigns  = c("文革", "运动", "右派", "反右", "批斗", "红卫兵",
+                           "反革命", "大跃进", "整风", "劳改"),
+  fate_era             = c("时代", "命运", "个人", "普通", "人性", "悲剧"),
+  generational_memory  = c("过去", "反思", "年轻", "一代", "了解"),
+  censorship_fifth_gen = c("导演", "田壮壮", "禁片", "被禁", "十年", "第五代",
+                           "霸王别姬", "活着", "张艺谋", "陈凯歌"),
+  film_form            = c("镜头", "叙事", "视角", "观众", "表达", "情感"),
+  gender               = c("女人", "男人", "女性")
+))
+n_residual <- 3   # residual ("other") topics with no seeds
+
+# Words deliberately NOT seeded, to see where the model puts them
+probes <- c(
+  # Shujuan / the mother, the narrator, and the chapter titles
+  "母亲", "妈妈", "树娟", "吕丽萍", "铁头", "爸爸", "叔叔", "继父",
+  # marriage words and 克夫 (outcome 3 of the gender test)
+  "婚姻", "结婚", "改嫁", "嫁", "丈夫", "克夫",
+  # words considered and dropped as seeds; their placement is reported
+  "家庭", "历史", "记忆", "政治", "人民", "国家", "党", "革命", "角色",
+  # symbols
+  "乌鸦", "蓝色", "自由", "平静")
+
+# Checks: no word in two topics, no probe seeded, and report seeds that are
+# too rare to be in the vocabulary (they are simply ignored)
+seed_words <- unlist(as.list(seeds), use.names = FALSE)
+stopifnot(!any(duplicated(seed_words)), !any(probes %in% seed_words))
+missing_seeds <- setdiff(seed_words, featnames(dfmat))
+if (length(missing_seeds)) cat("Seed words not in the vocabulary (ignored):",
+                               paste(missing_seeds, collapse = " "), "\n")
+
+# Paragraphs containing each seed (for the Table A3 note; the rule is >= 10)
+seed_counts <- tibble(topic = rep(names(seeds), lengths(as.list(seeds))),
+                      word = seed_words,
+                      paragraphs = as.integer(docfreq(dfmat)[seed_words]))
+kable(seed_counts)
+write_excel_csv(seed_counts, file.path(out_dir, "seed_paragraph_counts.csv"))
+```
+
+## Stability across 100 runs, and the most typical run
+
+As with the unsupervised model, the seeded model is fitted 100 times. Seeded
+topics have names, so runs are compared topic by topic. The tables below show
+how much the results vary, and every table and figure after this section
+(including LDAvis) uses the **most typical run**.
+
+```{r stability-seeded}
+# Fit: 7 seeded topics + 3 residual ("other") topics, 100 times
+seeded_runs <- map(1:n_runs, function(s) {
+  set.seed(s)
+  textmodel_seededlda(dfmat, seeds, residual = n_residual, max_iter = 2000, auto_iter = TRUE)
+})
+seeded_names <- names(seeds)
+
+# Convergence check (see the unsupervised model above)
+iters <- unlist(lapply(seeded_runs, function(m) m$last_iter))
+if (length(iters)) cat("Gibbs iterations used per run: min", min(iters), ", max", max(iters),
+                       "(limit 2000)\n")
+
+# Compare all pairs of runs on four criteria (seeded topics matched by name)
+typ_s <- typical_run(seeded_runs, names = seeded_names)
+cat("How similar the runs are (1 = identical):\n")
+kable(typ_s$overall)
+cat("The 5 most typical runs (rank 1 = most typical on that criterion):\n")
+kable(head(typ_s$table, 5))
+write_excel_csv(typ_s$table, file.path(out_dir, "stability_seeded_runs.csv"))
+seeded_medoid <- typ_s$medoid
+
+# (a) Topic sizes: average, smallest and largest share across all runs
+share_summary <- map_dfr(seq_along(seeded_runs), function(i) {
+  sh <- topic_share(seeded_runs[[i]])
+  tibble(run = i, topic = names(sh), share = 100 * sh)
+}) %>%
+  group_by(topic) %>%
+  summarise(mean_pct = round(mean(share), 1), min_pct = round(min(share), 1),
+            max_pct = round(max(share), 1)) %>%
+  arrange(desc(mean_pct))
+kable(share_summary)
+write_excel_csv(share_summary, file.path(out_dir, "stability_topic_shares.csv"))
+
+# (b) Where key words land: in how many runs each word falls in each topic
+stab_words <- c("母亲", "妈妈", "树娟", "吕丽萍", "铁头", "继父",
+                "婚姻", "嫁", "丈夫", "克夫", "政治", "历史")
+landing_summary <- map_dfr(seq_along(seeded_runs),
+                           ~ landing(seeded_runs[[.x]], stab_words) %>% mutate(run = .x)) %>%
+  count(word, top_topic, name = "runs") %>%
+  mutate(pct_runs = round(100 * runs / n_runs)) %>%
+  arrange(factor(word, levels = stab_words), desc(runs))
+kable(landing_summary)
+write_excel_csv(landing_summary, file.path(out_dir, "stability_word_landing.csv"))
+
+# (c) Stable top words: words in a topic's top 10 in at least 80% of runs
+stable_words <- map_dfr(seq_along(seeded_runs), function(i) {
+  tt <- seededlda::terms(seeded_runs[[i]], 10)
+  tibble(run = i, topic = rep(colnames(tt), each = nrow(tt)), word = as.vector(tt))
+}) %>%
+  filter(topic %in% seeded_names) %>%
+  count(topic, word) %>%
+  mutate(pct = round(100 * n / n_runs)) %>%
+  filter(pct >= 80) %>%
+  arrange(topic, desc(pct)) %>%
+  group_by(topic) %>%
+  summarise(stable_top_words = paste0(word, " (", pct, "%)", collapse = "  "))
+kable(stable_words)
+write_excel_csv(stable_words, file.path(out_dir, "stability_top_words.csv"))
+
+# From here on, use the most typical run
+slda <- seeded_runs[[seeded_medoid]]
+kable(seededlda::terms(slda, 12))
+
+# Which seeded topics are stable across all runs?
+seeded_topic_stab <- topic_stability(seeded_runs, seeded_medoid, names = seeded_names)
+kable(seeded_topic_stab)
+write_excel_csv(seeded_topic_stab, file.path(out_dir, "stability_seeded_topics.csv"))
+```
+
+## Topic prevalence (share of tokens)
+
+```{r prevalence}
+# Share of all words in the corpus assigned to each topic (topic_share() is defined in section 8)
+prev <- tibble(topic = names(topic_share(slda)),
+               share_pct = round(100 * topic_share(slda), 1))
+kable(prev)
+write_excel_csv(prev, file.path(out_dir, "seeded_topic_prevalence.csv"))
+```
+
+## Topic shares aggregated to reviews
+
+```{r review-level}
+# Each review contributes several paragraphs; here paragraph topic shares are
+# combined back into one profile per review (weighted by paragraph length).
+para_len <- rowSums(dfmat)
+review_id <- docvars(dfmat, "id")
+review_theta <- rowsum(slda$theta * para_len, review_id) / as.vector(rowsum(para_len, review_id))
+
+review_level <- tibble(topic = colnames(review_theta),
+                       mean_share_pct = round(100 * colMeans(review_theta), 1),
+                       pct_reviews_with_20pct_plus = round(100 * colMeans(review_theta >= 0.2), 1)) %>%
+  arrange(desc(mean_share_pct))
+kable(review_level)
+write_excel_csv(review_level, file.path(out_dir, "seeded_topic_by_review.csv"))
+```
+
+## The gender test
+
+The outcomes, stated before the results: if the Gender topic fills with era,
+nation and campaign words (or sits close to Political Campaigns and Fate and
+the Era), viewers read the woman as the bearer of national history; if it
+fills with subjectivity words, they share the critics' frame; if it fills with
+mother, family, fate, 克夫 or marriage words, they use a frame of their own; if
+it does not hold together across runs, the reviews have no organized gender
+discussion. Stability across runs is in `stability_seeded_topics.csv`.
+
+```{r gender-test}
+# 1. How much of the Gender topic is its own seeds? Share of the topic's word
+#    probability that comes from 女人 男人 女性. Near 1 = little more than its
+#    seeds; lower = it attracts other vocabulary.
+g_seeds <- intersect(as.list(seeds)$gender, colnames(slda$phi))
+g_share <- round(sum(slda$phi["gender", g_seeds]), 2)
+cat("Share of the Gender topic's probability from its seeds:", g_share, "\n")
+write_excel_csv(tibble(seeds = paste(g_seeds, collapse = " "), seed_share = g_share),
+                file.path(out_dir, "gender_seed_share.csv"))
+
+# 2. What fills it: top 30 words by probability (lambda = 1) and by relevance
+#    (lambda = 0.6, as in LDAvis). Seeds are marked with *.
+relevance_terms <- function(m, topic, lambda, n = 30, x = dfmat) {
+  pw <- colSums(x)[colnames(m$phi)]
+  pw <- pw / sum(pw)
+  r <- lambda * log(m$phi[topic, ]) + (1 - lambda) * log(m$phi[topic, ] / pw)
+  names(sort(r, decreasing = TRUE))[1:n]
+}
+mark_seed <- function(w) ifelse(w %in% g_seeds, paste0(w, "*"), w)
+gender_words <- tibble(rank = 1:30,
+                       by_probability = mark_seed(relevance_terms(slda, "gender", 1)),
+                       by_relevance_0.6 = mark_seed(relevance_terms(slda, "gender", 0.6)))
+kable(gender_words)
+write_excel_csv(gender_words, file.path(out_dir, "gender_topic_words.csv"))
+
+# 3. Where the Gender topic sits. Campaign words are seeded elsewhere, so
+#    outcome 1 is read from closeness to political_campaigns and fate_era:
+#    (a) distance between word distributions (Jensen-Shannon, as in LDAvis;
+#        smaller = more similar), (b) correlation of paragraph shares
+#        (positive = discussed in the same paragraphs).
+others <- setdiff(rownames(slda$phi), "gender")
+gender_rel <- tibble(
+  topic = others,
+  js_distance = round(map_dbl(others, ~ js_div(slda$phi["gender", ], slda$phi[.x, ])), 3),
+  theta_cor = round(map_dbl(others, ~ cor(slda$theta[, "gender"], slda$theta[, .x])), 2)) %>%
+  arrange(js_distance)
+kable(gender_rel)
+write_excel_csv(gender_rel, file.path(out_dir, "gender_topic_relations.csv"))
+
+# 4. The 30 paragraphs with the highest Gender share, for close reading
+top_g <- order(slda$theta[, "gender"], decreasing = TRUE)[1:30]
+gender_paras <- tibble(doc_id = docnames(dfmat)[top_g],
+                       gender_share = round(slda$theta[top_g, "gender"], 2)) %>%
+  left_join(paras %>% select(doc_id, date, votes, text), by = "doc_id")
+write_excel_csv(gender_paras, file.path(out_dir, "gender_top_paragraphs.csv"))
+```
+
+# 10. Where do the mother and other key words land?
+
+For each word, the probability of each topic given that word
+(p(topic | word), from the model's word distributions weighted by topic size).
+
+```{r probes}
+# For each word: which topic is it most likely to belong to? (landing() is defined in section 8)
+check_words <- unique(c(probes, "女人", "男人", "女性", "命运", "文革"))
+land <- landing(slda, check_words)
+kable(land)
+write_excel_csv(land, file.path(out_dir, "probe_word_topics.csv"))
+```
+
+# 11. Robustness
+
+## Different random starts and residual topics
+
+Does the mother still land in the same topic, and does the Gender topic keep
+the same size, when the model is rerun?
+
+```{r robustness}
+# 9 reruns: 3 random seeds x 1, 2 or 3 residual topics
+runs <- expand_grid(seed = c(1, 42, 2025), residual = c(1, 2, 3))
+robust <- pmap_dfr(runs, function(seed, residual) {
+  set.seed(seed)
+  m <- textmodel_seededlda(dfmat, seeds, residual = residual,
+                           max_iter = 2000, auto_iter = TRUE)
+  sh <- topic_share(m)
+  l <- landing(m, c("母亲", "树娟", "丈夫", "婚姻", "克夫"))
+  lands <- function(w) if (w %in% l$word) l$top_topic[l$word == w] else NA
+  tibble(seed = seed, residual = residual,
+         gender_pct = round(100 * sh[["gender"]], 1),
+         parents_child_pct = round(100 * sh[["parents_child"]], 1),
+         mother_lands_in = lands("母亲"),
+         shujuan_lands_in = lands("树娟"),
+         husband_lands_in = lands("丈夫"),
+         marriage_lands_in = lands("婚姻"),
+         kefu_lands_in = lands("克夫"))
+})
+kable(robust)
+write_excel_csv(robust, file.path(out_dir, "robustness.csv"))
+```
+
+## Alternative dictionaries
+
+Two checks on the design, each fitted once (seed 2025, 3 residual topics):
+
+- **(a) Bundled women and marriage.** The earlier design: the Gender seeds
+  plus the marriage words and 克夫 in one topic. Shows whether the result
+  depends on keeping gender and marriage apart.
+- **(b) Chapter titles seeded.** 爸爸, 叔叔 and 继父 added to Parents and Child.
+  Shows whether the mother and the marriage words move when the husbands are
+  fixed as fathers.
+
+```{r robustness-alt}
+alt_dicts <- list(
+  a_women_marriage = local({
+    d <- as.list(seeds)
+    d$gender <- NULL
+    d$women_marriage <- c("女人", "男人", "女性", "婚姻", "结婚", "改嫁", "嫁", "丈夫", "克夫")
+    dictionary(d)
+  }),
+  b_titles_seeded = local({
+    d <- as.list(seeds)
+    d$parents_child <- c(d$parents_child, "爸爸", "叔叔", "继父")
+    dictionary(d)
+  })
+)
+alt_words <- c("母亲", "妈妈", "树娟", "铁头", "女人", "丈夫", "婚姻", "克夫", "政治")
+alt_terms <- list()
+alt_results <- imap_dfr(alt_dicts, function(d, nm) {
+  set.seed(2025)
+  m <- textmodel_seededlda(dfmat, d, residual = n_residual,
+                           max_iter = 2000, auto_iter = TRUE)
+  test_topic <- intersect(c("women_marriage", "gender"), rownames(m$phi))[1]
+  top15 <- paste(seededlda::terms(m, 15)[, test_topic], collapse = " ")
+  cat("\n", nm, ": top 15 words of", test_topic, "\n", top15, "\n")
+  alt_terms[[nm]] <<- tibble(dictionary = nm, test_topic = test_topic, top15_words = top15)
+  landing(m, alt_words) %>%
+    mutate(dictionary = nm, test_topic_pct = round(100 * topic_share(m)[[test_topic]], 1))
+})
+kable(alt_results)
+write_excel_csv(alt_results, file.path(out_dir, "robustness_alt_dictionaries.csv"))
+write_excel_csv(bind_rows(alt_terms), file.path(out_dir, "robustness_alt_test_topic_words.csv"))
+```
+
+## Whole reviews instead of paragraphs
+
+The same seeded model fitted on the 306 whole reviews. If the main patterns
+hold here too, they do not depend on splitting reviews into paragraphs.
+
+```{r whole-review}
+# Add each review's paragraphs back together into one document per review
+dfm_review <- dfm_group(dfmat, groups = docvars(dfmat, "id"))
+
+set.seed(2025)
+slda_review <- textmodel_seededlda(dfm_review, seeds, residual = n_residual,
+                                   max_iter = 2000, auto_iter = TRUE)
+kable(seededlda::terms(slda_review, 10))
+write_excel_csv(as_tibble(seededlda::terms(slda_review, 15)), file.path(out_dir, "review_model_terms.csv"))
+
+# Compare: where key words land in the review-level vs paragraph-level model
+compare <- landing(slda_review, check_words, x = dfm_review) %>%
+  select(word, review_model = top_topic, review_p = p_top) %>%
+  left_join(land %>% select(word, paragraph_model = top_topic, paragraph_p = p_top),
+            by = "word")
+kable(compare)
+write_excel_csv(compare, file.path(out_dir, "review_vs_paragraph_model.csv"))
+```
+
+# 12. LDAvis
+
+Three ways to see the topic map:
+
+- **In this report:** it is embedded below (scroll inside the frame).
+- **In RStudio's Viewer pane:** run the `ldavis-viewer` chunk with its green
+  arrow. It only reads the saved file, so it opens instantly without rerunning
+  the models.
+- **In your browser:** double-click `LDAvis_seeded_standalone.html` in this
+  run's folder. (The `index.html` inside its `LDAvis_seeded/` folder will look blank if opened
+  directly, because browsers block it from loading its data file.)
+
+LDAvis renumbers topics by size, so the table below maps its numbers to the
+topic names.
+
+```{r ldavis}
+# Build the LDAvis data from the seeded model
+json <- createJSON(phi = slda$phi,
+                   theta = slda$theta,
+                   doc.length = rowSums(dfmat),
+                   vocab = colnames(slda$phi),
+                   term.frequency = colSums(dfmat)[colnames(slda$phi)])
+write(json, file.path(out_dir, "ldavis_seeded.json"))              # same format your Shiny app reads
+serVis(json, out.dir = file.path(out_dir, "LDAvis_seeded"), open.browser = FALSE)
+
+# Make a single self-contained page: put the code, style and data inside one
+# HTML file, and point LDAvis at the embedded data instead of a separate file.
+ldavis_dir <- file.path(out_dir, "LDAvis_seeded")
+read_txt <- function(f) paste(readLines(file.path(ldavis_dir, f), warn = FALSE,
+                                        encoding = "UTF-8"), collapse = "\n")
+standalone <- paste0(
+  '<!DOCTYPE html>\n<html><head><meta charset="utf-8">',
+  '<title>LDAvis: Blue Kite seeded LDA</title>\n',
+  '<style>', read_txt("lda.css"), '</style>\n',
+  '<script>', read_txt("d3.v3.js"), '</script>\n',
+  '<script>', read_txt("ldavis.js"), '</script>\n',
+  '</head><body><div id="lda"></div>\n<script>\n',
+  'var LDA_DATA = ', read_txt("lda.json"), ';\n',
+  'd3.json = function(url, callback) { callback(null, LDA_DATA); };\n',
+  'var vis = new LDAvis("#lda", "lda.json");\n',
+  '</script></body></html>')
+writeLines(standalone, file.path(out_dir, "LDAvis_seeded_standalone.html"), useBytes = TRUE)
+
+# Which LDAvis number is which topic
+topic_order <- jsonlite::fromJSON(json)$topic.order
+kable(tibble(ldavis_topic = seq_along(topic_order),
+             topic_name = rownames(slda$phi)[topic_order]))
+
+# Embed the topic map in the knitted report. "srcdoc" puts the whole page inside
+# the frame, so it does not depend on any other file.
+htmltools::tags$iframe(srcdoc = standalone, width = "100%", height = "900",
+                       style = "border: 1px solid #ddd;")
+```
+
+```{r ldavis-viewer}
+# Open the saved topic map in RStudio's Viewer pane.
+# Run this chunk with its green arrow; during Knit it does nothing.
+# RStudio's Viewer only shows local pages from R's temporary folder, so the
+# file is copied there first. Outside RStudio it opens in your browser instead.
+if (interactive()) {
+  # If this chunk is run on its own in a fresh session, use the latest run folder
+  if (!exists("out_dir")) {
+    out_dir <- tail(sort(grep("/run_", list.dirs("r_output", recursive = FALSE), value = TRUE)), 1)
+  }
+  src <- file.path(out_dir, "LDAvis_seeded_standalone.html")
+  tmp <- file.path(tempdir(), "LDAvis_seeded_standalone.html")
+  file.copy(src, tmp, overwrite = TRUE)
+  viewer <- getOption("viewer")
+  if (!is.null(viewer)) viewer(tmp) else utils::browseURL(tmp)
+}
+```
+
+# Session info
+
+```{r session}
+# Package versions used (for reproducibility)
+sessionInfo()
+```
