@@ -53,3 +53,7 @@ All results come from one final run. An earlier full run produced byte-for-byte 
 ## Author
 
 Jiayi Zhang, M.A. candidate in East Asian Studies, UCLA
+
+## License
+
+Code: MIT (see `LICENSE`). The license covers the code only, not the Douban review texts.
