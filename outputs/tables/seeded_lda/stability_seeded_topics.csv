@@ -1,0 +1,8 @@
+﻿"topic","top_words","mean_similarity","pct_runs_above_0.8"
+"parents_child","铁头 孩子 父亲 母亲 妈妈 儿子",0.977,99
+"political_campaigns","运动 文革 右派 批斗 红卫兵 树娟",0.968,100
+"fate_era","时代 命运 个人 悲剧 政治 普通",0.982,100
+"generational_memory","历史 过去 年轻 反思 了解 一代",0.86,85
+"censorship_fifth_gen","导演 田壮壮 活着 中国 霸王别姬 十年",0.993,100
+"film_form","镜头 观众 视角 故事 叙事 表达",0.939,99
+"gender","生活 男人 女人 幸福 压抑 日子",0.415,2
