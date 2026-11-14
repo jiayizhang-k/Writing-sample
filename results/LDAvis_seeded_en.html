@@ -9,7 +9,7 @@
 <script>
 // English version of LDAvis_seeded_standalone.html (same folder).
 // Reads the original page, translates the terms, and labels the topic circles.
-// Terms show as "English 中文" by default; add ?lang=en to the URL for English only.
+// Terms show as "English 中文" by default; add ?lang=en for English only, ?lang=zh for Chinese only.
 
 const TOPIC_LABELS = {
   1: "Political Campaigns",
@@ -37,11 +37,13 @@ const GLOSS = {
 "代人":"generation of people","反革命":"counterrevolutionary","构图":"composition","禁":"ban","我也":"me too","理由":"reason","温暖":"warmth","折磨":"torment","幸福":"happiness","想要":"want","年前":"years ago","想象":"imagine","研究生":"grad student","党":"the Party","厕所":"toilet","音乐":"music","生气":"angry","暗示":"hint","李国栋":"Li Guodong","情节":"storyline","迫害":"persecution","决定":"decide","经历过":"lived through","太太":"wife","叔叔":"uncle","一天":"one day","结尾":"final scene","跨度":"time span","懂得":"grasp","正常":"normal","未来":"future","任务":"task","不再":"no longer","震撼":"shocking","三段":"three parts","拍出":"capture on film","我看":"I watched","胡同":"hutong","客观":"objective","反抗":"resist","以后":"afterwards","习惯":"habit","阳光":"sunlight","眼泪":"tears","意思":"meaning","无关":"unrelated","干部":"cadre","强烈":"intense","多数":"majority","荒谬":"absurd","奶奶":"grandma","演员":"actor","悲伤":"sorrow","选择":"choice","北京":"Beijing","小舅":"youngest uncle","意见":"opinions","作品":"work","平静":"calm","责任":"responsibility","老吴":"Lao Wu","爸爸":"dad","真是":"truly","拍的":"filmed","越来越":"more and more","反复":"repeatedly","儿歌":"nursery rhyme","结婚":"marry","角度":"angle","经历":"experience","小说":"novel","都没有":"none at all","看看":"take a look","发现":"discover","慢慢":"slowly","事件":"event","相信":"believe","回到":"return to","艺术":"art","开头":"opening","斯大林":"Stalin","细节":"detail","老头":"old man","人类":"humanity","确实":"indeed","记得":"remember","直接":"directly","成分":"class status","社会":"society","继续":"continue","下乡":"sent to the countryside","曾经":"once","人物":"characters","婚姻":"marriage","主义":"-ism","变成":"turn into","说的":"said","贯穿":"run through","故事":"story","进行":"carry out","委屈":"wronged","回家":"go home","具有":"possess","家":"home","更多":"more","地上":"on the ground","集体":"collective","文化":"culture","自由":"freedom","四合院":"courtyard house","现实":"reality","红色":"red","火车":"train","童年":"childhood","第三":"third","不得不":"have to","才是":"is really","里面":"inside","背景":"background","永远":"forever","表现":"portray","家里":"at home","代表":"represent","想到":"think of","校长":"principal","回忆":"recollection","展现":"show","时间":"time","回来":"come back","角色":"role","得到":"obtain","眼睛":"eyes","第二":"second","快乐":"joy","保护":"protect","愿意":"willing","革命":"revolution","我是":"I am","出生":"born","母子":"mother and son","旁白":"voiceover","长大":"grow up","生命":"life","希望":"hope","地方":"place","世界":"world","不好":"bad","自然":"nature","讲述":"tell","象征":"symbol","不同":"different","涉及":"involve","好好":"properly","爱情":"romantic love","事实":"fact","少年":"youth","心中":"in one's heart","残酷":"cruel","敏感":"sensitive","沉重":"heavy","一家":"the whole family","吕丽萍":"Lü Liping","年代":"those years","真实":"real","国家":"country","死了":"died","记忆":"memory","方式":"way","问题":"problem","隐喻":"metaphor","场景":"scene","人民":"the people","思想":"thought","同样":"likewise","精神":"spirit","当时":"at the time","色彩":"color","一定":"surely","爱":"love","存在":"exist","破碎":"broken","成长":"growing up","理想":"ideals","岁月":"the years","讽刺":"irony","之前":"before","美好":"beautiful","害怕":"fear","结束":"end","内心":"inner self","人生":"one's life","理解":"comprehend"
 };
 
-const both = new URLSearchParams(location.search).get("lang") !== "en";
+const lang = new URLSearchParams(location.search).get("lang");   // null = both, "en", or "zh"
+const both = lang !== "en";
 
 function buildMap(terms) {
   const used = new Set(), map = {};
   for (const zh of terms) {
+    if (lang === "zh") { map[zh] = zh; continue; }
     let en = GLOSS[zh] || zh;
     let label = both && GLOSS[zh] ? en + " " + zh : en;
     if (used.has(label)) label = en + " (" + zh + ")";   // keep labels unique
@@ -55,11 +57,11 @@ const HEADER =
   '<div style="font-family:\'Times New Roman\',serif;max-width:1150px;margin:12px auto 0;">' +
   '<h2 style="margin:0 0 4px;">The Blue Kite: Seeded LDA Topics in Douban Reviews</h2>' +
   '<p style="margin:0 0 4px;">Interactive version of Figure 1. Hover over a circle to see its most relevant terms (English translations by the author); move the &lambda; slider to weight terms by distinctiveness. ' +
-  '<a href="?">English and Chinese</a> &middot; <a href="?lang=en">English only</a> &middot; <a href="LDAvis_seeded_standalone.html">Chinese only</a></p>' +
+  '<a href="?">English and Chinese</a> &middot; <a href="?lang=en">English only</a> &middot; <a href="?lang=zh">Chinese only</a></p>' +
   '<p style="margin:0;font-size:90%;">Topics are numbered by share of words. &dagger; Gender test topic, stable in only 2 percent of 100 model fits.</p></div>';
 
 // Label position relative to each circle: [anchor, dx, dy] (set by hand to avoid overlaps)
-const PLACE = {1:["middle",0,48], 2:["start",50,16], 3:["start",42,-4], 4:["middle",0,48],
+const PLACE = {1:["end",-44,4], 2:["start",50,16], 3:["start",42,-4], 4:["end",-44,4],
   5:["start",-30,-44], 6:["start",-48,56], 7:["start",18,-30], 8:["start",-110,40],
   9:["start",36,4], 10:["start",34,6]};
 
