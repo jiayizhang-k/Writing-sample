@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Blue Kite: Seeded LDA Topics in Douban Reviews (English)</title>
+</head>
+<body>
+<p id="loading" style="font-family:'Times New Roman',serif;margin:24px;">Loading the topic map…</p>
+<script>
+// English version of LDAvis_seeded_standalone.html (same folder).
+// Reads the original page, translates the terms, and labels the topic circles.
+// Terms show as "English 中文" by default; add ?lang=en to the URL for English only.
+
+const TOPIC_LABELS = {
+  1: "Political Campaigns",
+  2: "Film Form",
+  3: "Individual Fate and the Era",
+  4: "Parents and Child",
+  5: "Fifth Generation and the Ban",
+  6: "Generational Memory",
+  7: "Gender†",
+  8: "Everyday Life (residual)",
+  9: "Party Subplot (residual)",
+  10: "Symbols (residual)"
+};
+
+const GLOSS = {
+"时代":"era","导演":"director","铁头":"Tietou","田壮壮":"Tian Zhuangzhuang","运动":"campaign","孩子":"child","文革":"Cultural Revolution","命运":"fate","父亲":"father","历史":"history","活着":"To Live","母亲":"mother","右派":"rightist","乌鸦":"crow","镜头":"shot","政治":"politics","批斗":"criticize and denounce","红卫兵":"Red Guards","观众":"audience","树娟":"Shujuan","个人":"individual","妈妈":"mom","儿子":"son","中国":"China","生活":"daily life","悲剧":"tragedy","过去":"past","霸王别姬":"Farewell My Concubine","视角":"perspective","继父":"stepfather","少龙":"Shaolong","反右":"Anti-Rightist","三年":"three years","第一":"first","灾害":"disaster","整风":"Rectification","林少龙":"Lin Shaolong","营养":"nutrition","劳改":"labor reform","丈夫":"husband","婚礼":"wedding","劳累":"overwork","国栋":"Guodong","被打":"branded","砸死":"crushed to death","致死":"fatal","肝病":"liver disease","单位":"work unit","不良":"poor (mal-)","风暴":"storm","好友":"close friend","推迟":"postpone","图书":"library","大跃进":"Great Leap Forward","十天":"ten days",
+"叙事":"narrative","表达":"express","手法":"technique","情感":"emotion","形式":"form","整部":"whole film","语言":"language","处理":"handling","叙述":"narration","过于":"overly","剧情":"plot","明显":"obvious","还原":"recreate","形成":"take shape","大量":"a great deal","显得":"seem","冲突":"conflict","变化":"change","回味":"aftertaste","看待":"regard","效果":"effect","戏剧":"drama","作者":"author","凸显":"highlight","尤其":"especially","某种":"a certain","旁观":"onlooker","人性":"human nature","特殊":"special","个体":"the individual","之间":"between","家庭的":"family's","普通":"ordinary","有着":"have","家庭":"family","每个人":"everyone","独立":"independent","轨迹":"trajectory","考验":"ordeal","奈何":"helpless","丧失":"be deprived of","动荡":"turmoil","失去":"lose","深处":"depths","卑微":"lowly","探索":"explore","淋漓":"vividly","文明":"civilization","正义":"justice","洪流":"torrent","渺小":"insignificant","差不多":"about the same","呐喊":"outcry",
+"躺在":"lying on","带走":"taken away","邻居":"neighbor","姥姥":"maternal grandma","爷爷":"grandpa","床上":"in bed","我再":"I again","抓走":"arrested","砖头":"brick","离婚":"divorce","想想":"think it over","伙伴":"playmate","灯笼":"lantern","叛逆":"rebellious","房子":"house","打架":"fight","晚上":"evening","烧了":"burned","外面":"outside","睁开":"open (eyes)","一下子":"suddenly","一巴掌":"a slap","青蛙":"frog","bgm":"BGM","第二次":"second time",
+"十年":"ten years","被禁":"banned","禁片":"banned film","张艺谋":"Zhang Yimou","第五代":"Fifth Generation","拍摄":"filming","陈凯歌":"Chen Kaige","题材":"subject matter","日本":"Japan","禁止":"prohibit","野心":"ambition","暧昧":"ambiguous","国内":"domestic","最佳":"best","香港":"Hong Kong","是有":"there is","国外":"abroad","交流":"exchange","国际":"international","封杀":"blacklisted","大奖":"grand prize","史诗":"epic","小城":"small town","东京":"Tokyo","审查":"censorship","网络":"internet",
+"了解":"understand","年轻":"young","一代":"generation","反思":"reflection","你要":"you must","国人":"compatriots","尊重":"respect","糟粕":"dross","现代":"modern","不到":"less than","必须":"must","网上":"online","精华":"essence","真相":"truth","原谅":"forgive","现象":"phenomenon","也要":"also need to","什么时候":"when","不只是":"not only","课本":"textbook","遗忘":"forgetting","方向":"direction","文章":"essay","轮回":"cycle","专制":"autocracy","阻止":"prevent","传承":"pass down","逃避":"evade","折腾":"tumult",
+"男人":"man","身体":"body","痛苦":"pain","灾难":"catastrophe","沉默":"silence","消失":"disappear","变得":"become","感动":"moved","灿烂":"brilliant","隐忍":"forbearance","女人":"woman","压抑":"repression","艰难":"hardship","活下去":"keep living","黑暗":"darkness","死亡":"death","日子":"days","也不能":"cannot either","危险":"danger","女性":"female","都很":"all very","春天":"spring","是非":"right and wrong","看不见":"unseen","爆发":"erupt","并非":"not really","小心":"careful","再来":"once more","破灭":"shattered","生死":"life and death",
+"思考":"thinking","吴清源":"The Go Master","学生":"student","如今":"nowadays","认识":"know","和平":"peace","孤独":"loneliness","崇敬":"reverence","纯粹":"pure","老师":"teacher","文字":"writing","绝对":"absolutely","我还":"I still","参与":"take part","欲望":"desire","方法":"method","头发":"hair","意境":"mood","血淋淋":"bloody","我爸":"my dad","你会":"you will","不大":"not much","少数":"minority","戾气":"hostility","不需要":"no need","不公":"injustice","冷酷":"cold-blooded","话语":"discourse","毕业":"graduate","关怀":"care",
+"朱瑛":"Zhu Ying","跳舞":"dancing","大姐":"eldest sister","树生":"Shusheng","馒头":"steamed bun","首长":"senior cadre","文工团":"art troupe","不愿":"unwilling","教育":"education","监狱":"prison","食堂":"canteen","大舅":"eldest uncle","主动":"voluntarily","工厂":"factory","女朋友":"girlfriend","漂亮":"pretty","女友":"girlfriend","公社":"commune","领导":"leader","拒绝":"refuse","中央":"Central Committee","共产":"communist","全是":"all","不见":"gone","团长":"troupe leader","扣上":"labeled","二哥":"second brother","恋爱":"romance",
+"克夫":"kefu","姐姐":"sister","蓝色":"blue","老了":"grown old","不吃":"not eat","喂过":"fed","真能":"really can","鸟叫":"birdsong","时刻":"moment","反哺":"filial repayment","结局":"ending","一口":"a mouthful","私人":"private","忍耐":"endurance","时光":"bygone days","破败":"dilapidated","树枝上":"on the branch","不会有":"there won't be","蒙蒙":"hazy","不堪":"unbearable","外公":"maternal grandpa","灰色":"gray","鲜血":"blood","究竟":"after all","破烂":"ragged","天空":"sky","每天":"every day","从前":"in the old days","忧郁":"melancholy","标题":"title",
+"代人":"generation of people","反革命":"counterrevolutionary","构图":"composition","禁":"ban","我也":"me too","理由":"reason","温暖":"warmth","折磨":"torment","幸福":"happiness","想要":"want","年前":"years ago","想象":"imagine","研究生":"grad student","党":"the Party","厕所":"toilet","音乐":"music","生气":"angry","暗示":"hint","李国栋":"Li Guodong","情节":"storyline","迫害":"persecution","决定":"decide","经历过":"lived through","太太":"wife","叔叔":"uncle","一天":"one day","结尾":"final scene","跨度":"time span","懂得":"grasp","正常":"normal","未来":"future","任务":"task","不再":"no longer","震撼":"shocking","三段":"three parts","拍出":"capture on film","我看":"I watched","胡同":"hutong","客观":"objective","反抗":"resist","以后":"afterwards","习惯":"habit","阳光":"sunlight","眼泪":"tears","意思":"meaning","无关":"unrelated","干部":"cadre","强烈":"intense","多数":"majority","荒谬":"absurd","奶奶":"grandma","演员":"actor","悲伤":"sorrow","选择":"choice","北京":"Beijing","小舅":"youngest uncle","意见":"opinions","作品":"work","平静":"calm","责任":"responsibility","老吴":"Lao Wu","爸爸":"dad","真是":"truly","拍的":"filmed","越来越":"more and more","反复":"repeatedly","儿歌":"nursery rhyme","结婚":"marry","角度":"angle","经历":"experience","小说":"novel","都没有":"none at all","看看":"take a look","发现":"discover","慢慢":"slowly","事件":"event","相信":"believe","回到":"return to","艺术":"art","开头":"opening","斯大林":"Stalin","细节":"detail","老头":"old man","人类":"humanity","确实":"indeed","记得":"remember","直接":"directly","成分":"class status","社会":"society","继续":"continue","下乡":"sent to the countryside","曾经":"once","人物":"characters","婚姻":"marriage","主义":"-ism","变成":"turn into","说的":"said","贯穿":"run through","故事":"story","进行":"carry out","委屈":"wronged","回家":"go home","具有":"possess","家":"home","更多":"more","地上":"on the ground","集体":"collective","文化":"culture","自由":"freedom","四合院":"courtyard house","现实":"reality","红色":"red","火车":"train","童年":"childhood","第三":"third","不得不":"have to","才是":"is really","里面":"inside","背景":"background","永远":"forever","表现":"portray","家里":"at home","代表":"represent","想到":"think of","校长":"principal","回忆":"recollection","展现":"show","时间":"time","回来":"come back","角色":"role","得到":"obtain","眼睛":"eyes","第二":"second","快乐":"joy","保护":"protect","愿意":"willing","革命":"revolution","我是":"I am","出生":"born","母子":"mother and son","旁白":"voiceover","长大":"grow up","生命":"life","希望":"hope","地方":"place","世界":"world","不好":"bad","自然":"nature","讲述":"tell","象征":"symbol","不同":"different","涉及":"involve","好好":"properly","爱情":"romantic love","事实":"fact","少年":"youth","心中":"in one's heart","残酷":"cruel","敏感":"sensitive","沉重":"heavy","一家":"the whole family","吕丽萍":"Lü Liping","年代":"those years","真实":"real","国家":"country","死了":"died","记忆":"memory","方式":"way","问题":"problem","隐喻":"metaphor","场景":"scene","人民":"the people","思想":"thought","同样":"likewise","精神":"spirit","当时":"at the time","色彩":"color","一定":"surely","爱":"love","存在":"exist","破碎":"broken","成长":"growing up","理想":"ideals","岁月":"the years","讽刺":"irony","之前":"before","美好":"beautiful","害怕":"fear","结束":"end","内心":"inner self","人生":"one's life","理解":"comprehend"
+};
+
+const both = new URLSearchParams(location.search).get("lang") !== "en";
+
+function buildMap(terms) {
+  const used = new Set(), map = {};
+  for (const zh of terms) {
+    let en = GLOSS[zh] || zh;
+    let label = both && GLOSS[zh] ? en + " " + zh : en;
+    if (used.has(label)) label = en + " (" + zh + ")";   // keep labels unique
+    used.add(label);
+    map[zh] = label;
+  }
+  return map;
+}
+
+const HEADER =
+  '<div style="font-family:\'Times New Roman\',serif;max-width:1150px;margin:12px auto 0;">' +
+  '<h2 style="margin:0 0 4px;">The Blue Kite: Seeded LDA Topics in Douban Reviews</h2>' +
+  '<p style="margin:0 0 4px;">Interactive version of Figure 1. Hover over a circle to see its most relevant terms (English translations by the author); move the &lambda; slider to weight terms by distinctiveness. ' +
+  '<a href="?">English and Chinese</a> &middot; <a href="?lang=en">English only</a> &middot; <a href="LDAvis_seeded_standalone.html">Chinese only</a></p>' +
+  '<p style="margin:0;font-size:90%;">Topics are numbered by share of words. &dagger; Gender test topic, stable in only 2 percent of 100 model fits.</p></div>';
+
+// Label position relative to each circle: [anchor, dx, dy] (set by hand to avoid overlaps)
+const PLACE = {1:["middle",0,48], 2:["start",50,16], 3:["start",42,-4], 4:["middle",0,48],
+  5:["start",-30,-44], 6:["start",-48,56], 7:["start",18,-30], 8:["start",-110,40],
+  9:["start",36,4], 10:["start",34,6]};
+
+const LABEL_SCRIPT = '<script>(' + function (labels, place) {
+  var NS = "http://www.w3.org/2000/svg";
+  function apply() {
+    var txt = document.querySelectorAll("#lda .points text.txt");
+    if (!txt.length) return setTimeout(apply, 100);
+    txt.forEach(function (t) {
+      var n = t.textContent.trim();
+      if (!labels[n]) return;
+      var p = place[n];
+      var l = document.createElementNS(NS, "text");
+      l.textContent = n + " " + labels[n];
+      l.setAttribute("text-anchor", p[0]);
+      l.setAttribute("x", +t.getAttribute("x") + p[1]);
+      l.setAttribute("y", +t.getAttribute("y") + p[2]);
+      l.setAttribute("class", "topiclabel");
+      l.setAttribute("style", "font-size:11px;font-weight:bold;paint-order:stroke;stroke:white;stroke-width:3px;pointer-events:none;");
+      t.parentNode.appendChild(l);
+    });
+  }
+  apply();
+} + ')(' + JSON.stringify(TOPIC_LABELS) + ',' + JSON.stringify(PLACE) + ');<\/script>';
+
+fetch("LDAvis_seeded_standalone.html")
+  .then(r => r.text())
+  .then(html => {
+    const startTag = "var LDA_DATA = ";
+    const s = html.indexOf(startTag) + startTag.length;
+    const e = html.indexOf(";\nd3.json", s);
+    const data = JSON.parse(html.slice(s, e));
+    const map = buildMap([...new Set(data.tinfo.Term)]);
+    data.tinfo.Term = data.tinfo.Term.map(t => map[t] || t);
+    data["token.table"].Term = data["token.table"].Term.map(t => map[t] || t);
+    let out = html.slice(0, s) + JSON.stringify(data) + html.slice(e);
+    out = out.replace(/<title>[^<]*<\/title>/, "<title>The Blue Kite: Seeded LDA Topics (English)</title>");
+    out = out.replace(/(<body[^>]*>)/, "$1" + HEADER);
+    out = out.replace("</body>", LABEL_SCRIPT + "</body>");
+    document.open(); document.write(out); document.close();
+  })
+  .catch(err => {
+    document.getElementById("loading").textContent =
+      "Could not load the topic map (" + err + "). Open LDAvis_seeded_standalone.html instead.";
+  });
+</script>
+</body>
+</html>
