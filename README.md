@@ -2,9 +2,11 @@
 
 Code and results for my writing sample on how Chinese viewers interpret *The Blue Kite* (蓝风筝, dir. Tian Zhuangzhuang, 1993), a film banned in mainland China that follows one family through the Anti-Rightist Campaign, the Great Leap Forward, and the Cultural Revolution.
 
-> ### 📄 All analysis code: [`blue_kite_analysis.Rmd`](blue_kite_analysis.Rmd)
-> ### 🗺️ Interactive topic map (Figure 1): [open in your browser](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html)
-> Terms shown in English and Chinese; switch to [English only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=en) or [Chinese only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=zh).
+Thanks for stopping by and taking a look!
+
+- **Curious about the code?** → [`blue_kite_analysis.Rmd`](blue_kite_analysis.Rmd) has the full analysis, from cleaning the reviews to the topic models and figures.
+- **Want to explore the topic map?** → [Open the interactive version of Figure 1](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html). Hover over a circle to see the words that define each topic, or over a word to see which topics use it. Words are shown in English and Chinese (or [English only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=en) · [Chinese only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=zh)).
+- **Looking for the results behind the tables?** → [See which file matches each figure and table in the paper](#results), or browse the [`results/`](results/) folder.
 
 **Research question.** How do viewers of *The Blue Kite* interpret the suffering it shows under the revolutionary order, and how do they construct competing explanations of its causes and of who bears responsibility?
 
