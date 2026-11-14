@@ -6,7 +6,7 @@ Thanks for stopping by and taking a look!
 
 - **Curious about the analysis code?** → [`blue_kite_analysis.Rmd`](blue_kite_analysis.Rmd) has the full R analysis, from cleaning the reviews to the topic models and figures.
 - **Want to explore the topic map?** → [Open the interactive version of Figure 1](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html). Hover over a circle to see the words that define each topic, or over a word to see which topics use it. Words are shown in English and Chinese (or [English only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=en) · [Chinese only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=zh)).
-- **Wondering how the reviews were coded by hand?** → [`hand_coding/responsibility_codebook.md`](hand_coding/responsibility_codebook.md) gives the codebook and counts for the 74 reviews I read in full and coded for where they place responsibility. This step was close reading, not R.
+- **Wondering how the reviews were coded by hand?** → [`hand_coding/`](hand_coding/) has the codebooks and counts for two hand-coding schemes: [*kefu*](hand_coding/kefu_codebook.md) (21 reviews and comments that use the folk label) and [responsibility](hand_coding/responsibility_codebook.md) (74 long reviews, coded for where they place the cause of the suffering). This step was close reading, not R.
 - **Looking for the results behind the tables?** → [See which file matches each figure and table in the paper](#results), or browse the [`results/`](results/) folder.
 
 **Research question.** How do viewers of *The Blue Kite* interpret the suffering it shows under the revolutionary order, and how do they construct competing explanations of its causes and of who bears responsibility?
@@ -34,7 +34,7 @@ Computational methods are used to guide close reading, not to replace it.
 2. **Exploratory maps** (`Rtsne`): t-SNE of the 80 most frequent and the 80 most distinctive (TF-IDF) words.
 3. **Unsupervised LDA**: k = 8, chosen after comparing values of k from 4 to 15; 100 fits from different random starts.
 4. **Seeded LDA** (`seededlda`): a seed dictionary of 7 topics, built from the exploratory models with explicit rules for each seed word, plus 3 residual topics; 100 fits.
-5. **Close reading and hand coding**: every quoted review was read in full. Two coding schemes (the folk belief *kefu* and the attribution of responsibility) are described in the paper; the responsibility codebook and counts are in [`hand_coding/`](hand_coding/).
+5. **Close reading and hand coding**: every quoted review was read in full. Two coding schemes, for the folk belief *kefu* and for the attribution of responsibility; their codebooks and counts are in [`hand_coding/`](hand_coding/).
 
 ## Results
 
@@ -50,6 +50,7 @@ Key outputs from the final run, in [`results/`](results/):
 | Where unseeded words land across 100 fits (discussed with Table A3) | `stability_word_landing.csv` |
 | Gender test | `gender_topic_words.csv` |
 | Choice of k; robustness | `k_selection.csv`; `robustness.csv` |
+| *Kefu* coding (Explaining Misfortune) | [`hand_coding/kefu_codebook.md`](hand_coding/kefu_codebook.md) (hand coding, not in `results/`) |
 | Responsibility coding (footnote, Assigning Responsibility) | [`hand_coding/responsibility_codebook.md`](hand_coding/responsibility_codebook.md) (hand coding, not in `results/`) |
 
 In `tsne_cluster_terms.csv`, cluster numbers match the legends of Figures A1 (`frequency`) and A2 (`tfidf`). `top_terms` are the ten highest-weighted words in each cluster, by frequency or TF-IDF weight; `additional_terms` are key words beyond the top ten (campaign, ban, and gender words, and words left unseeded in the seeded model). 自然 ("natural") often appears in 三年自然灾害, "the three years of natural disasters," the official term for the 1959–61 famine; elsewhere it means "naturally" or "nature."
