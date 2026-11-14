@@ -33,7 +33,7 @@ Computational methods are used to guide close reading, not to replace it.
 2. **Exploratory maps** (`Rtsne`): t-SNE of the 80 most frequent and the 80 most distinctive (TF-IDF) words.
 3. **Unsupervised LDA**: k = 8, chosen after comparing values of k from 4 to 15; 100 fits from different random starts.
 4. **Seeded LDA** (`seededlda`): a seed dictionary of 7 topics, built from the exploratory models with explicit rules for each seed word, plus 3 residual topics; 100 fits.
-5. **Close reading and hand coding**: every quoted review was read in full. Two coding schemes (the folk belief *kefu* and the attribution of responsibility) are described in the paper's appendix.
+5. **Close reading and hand coding**: every quoted review was read in full. Two coding schemes (the folk belief *kefu* and the attribution of responsibility) are described in the paper.
 
 ## Results
 
@@ -42,13 +42,15 @@ Key outputs from the final run, in [`results/`](results/):
 | Paper | File |
 |---|---|
 | Figure 1: seeded LDA topic map | [Interactive map](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html) (`LDAvis_seeded_en.html`); Chinese original `LDAvis_seeded_standalone.html` |
-| Figures A1–A2: t-SNE word maps | `fig_tsne_freq.png`, `fig_tsne_tfidf.png` |
-| Table A2: unsupervised LDA | `lda_summary.csv` |
-| Table A3: seed dictionary | `seed_paragraph_counts.csv` |
-| Table A4: seeded topics and their stability across 100 fits | `stability_seeded_topics.csv`, `seeded_topic_prevalence.csv` |
-| Table A5: where unseeded words land across 100 fits | `stability_word_landing.csv` |
+| Figures A1–A2: t-SNE word maps | `fig_tsne_freq.png`, `fig_tsne_tfidf.png`; words in each cluster: `tsne_cluster_terms.csv` |
+| Table A1: unsupervised LDA | `lda_summary.csv` |
+| Table A2: seed dictionary | `seed_paragraph_counts.csv` |
+| Table A3: seeded topics and their stability across 100 fits | `stability_seeded_topics.csv`, `seeded_topic_prevalence.csv` |
+| Where unseeded words land across 100 fits (discussed with Table A3) | `stability_word_landing.csv` |
 | Gender test | `gender_topic_words.csv` |
 | Choice of k; robustness | `k_selection.csv`; `robustness.csv` |
+
+In `tsne_cluster_terms.csv`, cluster numbers match the legends of Figures A1 (`frequency`) and A2 (`tfidf`). `top_terms` are the ten highest-weighted words in each cluster, by frequency or TF-IDF weight; `additional_terms` are key words beyond the top ten (campaign, ban, and gender words, and words left unseeded in the seeded model). 自然 ("natural") often appears in 三年自然灾害, "the three years of natural disasters," the official term for the 1959–61 famine; elsewhere it means "naturally" or "nature."
 
 All results come from one final run. An earlier full run produced byte-for-byte identical data files; only the label placement in the t-SNE figures differs. Package versions are printed at the end of the R Markdown file. Requires R (≥ 4.5).
 
