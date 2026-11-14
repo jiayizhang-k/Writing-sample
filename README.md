@@ -2,6 +2,10 @@
 
 Code and results for my writing sample on how Chinese viewers interpret *The Blue Kite* (蓝风筝, dir. Tian Zhuangzhuang, 1993), a film banned in mainland China that follows one family through the Anti-Rightist Campaign, the Great Leap Forward, and the Cultural Revolution.
 
+> ### 📄 All analysis code: [`blue_kite_analysis.Rmd`](blue_kite_analysis.Rmd)
+> ### 🗺️ Interactive topic map (Figure 1): [open in your browser](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html)
+> Terms shown in English and Chinese; switch to [English only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=en) or [Chinese only](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html?lang=zh).
+
 **Research question.** How do viewers of *The Blue Kite* interpret the suffering it shows under the revolutionary order, and how do they construct competing explanations of its causes and of who bears responsibility?
 
 ## Code
@@ -35,7 +39,7 @@ Key outputs from the final run, in [`results/`](results/):
 
 | Paper | File |
 |---|---|
-| Figure 1: seeded LDA topic map | `LDAvis_seeded_standalone.html` (download and open in a browser) |
+| Figure 1: seeded LDA topic map | [Interactive map](https://jiayizhang-k.github.io/Writing-sample/results/LDAvis_seeded_en.html) (`LDAvis_seeded_en.html`); Chinese original `LDAvis_seeded_standalone.html` |
 | Figures A1–A2: t-SNE word maps | `fig_tsne_freq.png`, `fig_tsne_tfidf.png` |
 | Table A2: unsupervised LDA | `lda_summary.csv` |
 | Table A3: seed dictionary | `seed_paragraph_counts.csv` |
